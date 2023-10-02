@@ -1,6 +1,6 @@
-static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
+static int qfs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 {
-	struct f2fs_sb_info *sbi;
+	struct qfs_sb_info *sbi;
 	struct atomic_file_set *afs;
 	struct atomic_file *af_elem, *tmp;
 	struct inode *inode = NULL;
@@ -17,7 +17,7 @@ static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 	};
 	struct inmem_pages *inmem_cur, *inmem_tmp;
 	struct inmem_node_pages *inmem_node_cur, *inmem_node_tmp;
-	struct f2fs_io_info fio;
+	struct qfs_io_info fio;
 	pgoff_t last_idx = ULONG_MAX;
 	int count;
 
@@ -53,8 +53,8 @@ static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 	head = &afs->afs_list;
 
 	/* checkpoint should be blocked before below code block */
-	f2fs_balance_fs(sbi, true);
-	f2fs_lock_op(sbi);
+	qfs_balance_fs(sbi, true);
+	qfs_lock_op(sbi);
 
 	/*
 	 * Below codes are for processing inmem_pages list
@@ -78,7 +78,7 @@ static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 	 */
 	list_for_each_entry_safe(af_elem, tmp, head, list) {
 		struct inode *inode = af_elem->inode;
-		struct f2fs_inode_info *fi = F2FS_I(inode);
+		struct qfs_inode_info *fi = F2FS_I(inode);
 		inode_lock(inode);
 		down_write(&F2FS_I(inode)->i_gc_rwsem[WRITE]);
 		mutex_lock(&fi->inmem_lock);
@@ -93,7 +93,7 @@ static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 	afs->commit_file_count = 0;
 
 	if (!afs->master_nid) {
-		ret = f2fs_build_master_node(afs);
+		ret = qfs_build_master_node(afs);
 		if (ret) {
 			printk("[JATA DBG] %s return error"
 			       "because building master node failed\n", __func__);
@@ -101,7 +101,7 @@ static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 		}
 	}
 
-	mpage = f2fs_get_node_page(sbi, afs->master_nid);
+	mpage = qfs_get_node_page(sbi, afs->master_nid);
 
 	/*
 	 * Step 2: Do atomic write of data pages
@@ -123,17 +123,17 @@ static int f2fs_ioc_commit_atomic_file_set(struct file *filp, unsigned long arg)
 
 		if (page->mapping == inode->i_mapping) {
 			set_page_dirty(page);
-			f2fs_wait_on_page_writeback(page, DATA, true);
+			qfs_wait_on_page_writeback(page, DATA, true);
 			if (clear_page_dirty_for_io(page)) {
 				inode_dec_dirty_pages(inode);
-				f2fs_remove_dirty_inode(inode);
+				qfs_remove_dirty_inode(inode);
 			}
 retry:
 			fio.page = page;
 			fio.old_blkaddr = NULL_ADDR;
 			fio.encrypted_page = NULL;
 			fio.need_lock = LOCK_DONE;
-			ret = f2fs_do_write_data_page(&fio);
+			ret = qfs_do_write_data_page(&fio);
 			if (ret) {
 				if (ret == -ENOMEM) {
 					congestion_wait(BLK_RW_ASYNC, HZ/50);
@@ -164,7 +164,7 @@ retry:
 		lock_page(page);
 
 		set_page_dirty(page);
-		f2fs_wait_on_page_writeback(page, NODE, true);
+		qfs_wait_on_page_writeback(page, NODE, true);
 
 		set_fsync_mark(page, 0);
 		set_dentry_mark(page, 0);
@@ -190,19 +190,19 @@ retry:
 			mn = page_address(mpage);
 
 			nid = nid_of_node(page);
-			f2fs_get_node_info(sbi, nid, &ni);
+			qfs_get_node_info(sbi, nid, &ni);
 
 			mn->atm_addrs[afs->commit_file_count++] = ni.blk_addr;
 		}
 
 		set_page_private(page, 0);
 		ClearPagePrivate(page);
-		f2fs_put_page(page, 0);
+		qfs_put_page(page, 0);
 		list_del(&inmem_node_cur->list);
 		kmem_cache_free(inmem_entry_slab, inmem_node_cur);
 	}
 
-	f2fs_flush_merged_writes(sbi);
+	qfs_flush_merged_writes(sbi);
 	blk_finish_plug(&plug);
 
 	list_for_each_entry_safe(af_elem, tmp, head, list) {
@@ -214,12 +214,12 @@ retry:
 	list_for_each_entry_safe(af_elem, tmp, head, list) {
 		struct inode *inode;
 		inode = af_elem->inode;
-		f2fs_wait_on_node_pages_writeback(sbi, inode->i_ino);
+		qfs_wait_on_node_pages_writeback(sbi, inode->i_ino);
 	}
 
 	set_fsync_mark(mpage, 1);
 	set_page_dirty(mpage);
-	f2fs_wait_on_page_writeback(mpage, NODE, true);
+	qfs_wait_on_page_writeback(mpage, NODE, true);
 
 	if (!clear_page_dirty_for_io(mpage)) {
 		printk("[JATA DBG] (%s) clear master node page fails\n", __func__);
@@ -230,14 +230,14 @@ retry:
 		printk("[JATA DBG] (%s) master node page write fails\n", __func__);
 		unlock_page(mpage);
 	}
-	f2fs_wait_on_page_writeback(mpage, NODE, true);
+	qfs_wait_on_page_writeback(mpage, NODE, true);
 
 	/*
 	 * Step 3: Release lock
 	 */
 	list_for_each_entry_safe(af_elem, tmp, head, list) {
 		struct inode *inode = af_elem->inode;
-		struct f2fs_inode_info *fi = F2FS_I(inode);
+		struct qfs_inode_info *fi = F2FS_I(inode);
 
 		clear_inode_flag(inode, FI_ATOMIC_COMMIT);
 		clear_inode_flag(inode, FI_ATOMIC_FILE);
@@ -252,14 +252,14 @@ retry:
 	}
 
 out:
-	f2fs_put_page(mpage, 0);
+	qfs_put_page(mpage, 0);
 	afs->commit_file_count = 0;
 
 	afs->committing = false;
 	afs->started = false;
 
 	/* checkpoint should be unblocked now. */
-	f2fs_unlock_op(sbi);
+	qfs_unlock_op(sbi);
 
 	up_write(&afs->afs_rwsem);
 
@@ -267,11 +267,11 @@ out:
 }
 
 
-static int f2fs_do_sync_file(struct file *file, loff_t start, loff_t end,
+static int qfs_do_sync_file(struct file *file, loff_t start, loff_t end,
 						int datasync, bool atomic)
 {
 	struct inode *inode = file->f_mapping->host;
-	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+	struct qfs_sb_info *sbi = F2FS_I_SB(inode);
 	nid_t ino = inode->i_ino;
 	int ret = 0;
 	enum cp_reason_type cp_reason = 0;
@@ -281,13 +281,13 @@ static int f2fs_do_sync_file(struct file *file, loff_t start, loff_t end,
 		.for_reclaim = 0,
 	};
 
-	if (unlikely(f2fs_readonly(inode->i_sb)))
+	if (unlikely(qfs_readonly(inode->i_sb)))
 		return 0;
 
-	trace_f2fs_sync_file_enter(inode);
+	trace_qfs_sync_file_enter(inode);
 
 	/* If file is atomic file, then it should not be synced before tx committing it. */
-	if (f2fs_is_atomic_file(inode))
+	if (qfs_is_atomic_file(inode))
 		return 0;
 
 	/* if fdatasync is triggered, let's do in-place-update */
@@ -297,13 +297,13 @@ static int f2fs_do_sync_file(struct file *file, loff_t start, loff_t end,
 	clear_inode_flag(inode, FI_NEED_IPU);
 
 	if (ret) {
-		trace_f2fs_sync_file_exit(inode, cp_reason, datasync, ret);
+		trace_qfs_sync_file_exit(inode, cp_reason, datasync, ret);
 		return ret;
 	}
 
 	/* if the inode is dirty, let's recover all the time */
-	if (!f2fs_skip_inode_update(inode, datasync)) {
-		f2fs_write_inode(inode, NULL);
+	if (!qfs_skip_inode_update(inode, datasync)) {
+		qfs_write_inode(inode, NULL);
 		goto go_write;
 	}
 
@@ -311,14 +311,14 @@ static int f2fs_do_sync_file(struct file *file, loff_t start, loff_t end,
 	 * if there is no written data, don't waste time to write recovery info.
 	 */
 	if (!is_inode_flag_set(inode, FI_APPEND_WRITE) &&
-			!f2fs_exist_written_data(sbi, ino, APPEND_INO)) {
+			!qfs_exist_written_data(sbi, ino, APPEND_INO)) {
 
 		/* it may call write_inode just prior to fsync */
 		if (need_inode_page_update(sbi, ino))
 			goto go_write;
 
 		if (is_inode_flag_set(inode, FI_UPDATE_WRITE) ||
-				f2fs_exist_written_data(sbi, ino, UPDATE_INO))
+				qfs_exist_written_data(sbi, ino, UPDATE_INO))
 			goto flush_out;
 		goto out;
 	}
@@ -333,7 +333,7 @@ go_write:
 
 	if (cp_reason) {
 		/* all the dirty node pages should be flushed for POR */
-		ret = f2fs_sync_fs(inode->i_sb, 1);
+		ret = qfs_sync_fs(inode->i_sb, 1);
 
 		/*
 		 * We've secured consistency through sync_fs. Following pino
@@ -346,20 +346,20 @@ go_write:
 	}
 sync_nodes:
 	atomic_inc(&sbi->wb_sync_req[NODE]);
-	ret = f2fs_fsync_node_pages(sbi, inode, &wbc, atomic);
+	ret = qfs_fsync_node_pages(sbi, inode, &wbc, atomic);
 	atomic_dec(&sbi->wb_sync_req[NODE]);
 	if (ret)
 		goto out;
 
 	/* if cp_error was enabled, we should avoid infinite loop */
-	if (unlikely(f2fs_cp_error(sbi))) {
+	if (unlikely(qfs_cp_error(sbi))) {
 		ret = -EIO;
 		goto out;
 	}
 
-	if (f2fs_need_inode_block_update(sbi, ino) && !f2fs_is_added_file(inode)) {
-		f2fs_mark_inode_dirty_sync(inode, true);
-		f2fs_write_inode(inode, NULL);
+	if (qfs_need_inode_block_update(sbi, ino) && !qfs_is_added_file(inode)) {
+		qfs_mark_inode_dirty_sync(inode, true);
+		qfs_write_inode(inode, NULL);
 		goto sync_nodes;
 	}
 
@@ -372,26 +372,26 @@ sync_nodes:
 	 * given fsync mark.
 	 */
 	if (!atomic) {
-		ret = f2fs_wait_on_node_pages_writeback(sbi, ino);
+		ret = qfs_wait_on_node_pages_writeback(sbi, ino);
 		if (ret)
 			goto out;
 	}
 
 	/* once recovery info is written, don't need to tack this */
-	f2fs_remove_ino_entry(sbi, ino, APPEND_INO);
+	qfs_remove_ino_entry(sbi, ino, APPEND_INO);
 	clear_inode_flag(inode, FI_APPEND_WRITE);
 flush_out:
 	if (!atomic && F2FS_OPTION(sbi).fsync_mode != FSYNC_MODE_NOBARRIER)
-		ret = f2fs_issue_flush(sbi, inode->i_ino);
+		ret = qfs_issue_flush(sbi, inode->i_ino);
 	if (!ret) {
-		f2fs_remove_ino_entry(sbi, ino, UPDATE_INO);
+		qfs_remove_ino_entry(sbi, ino, UPDATE_INO);
 		clear_inode_flag(inode, FI_UPDATE_WRITE);
-		f2fs_remove_ino_entry(sbi, ino, FLUSH_INO);
+		qfs_remove_ino_entry(sbi, ino, FLUSH_INO);
 	}
-	f2fs_update_time(sbi, REQ_TIME);
+	qfs_update_time(sbi, REQ_TIME);
 out:
-	trace_f2fs_sync_file_exit(inode, cp_reason, datasync, ret);
-	f2fs_trace_ios(NULL, 1);
+	trace_qfs_sync_file_exit(inode, cp_reason, datasync, ret);
+	qfs_trace_ios(NULL, 1);
 	return ret;
 }
 
@@ -454,15 +454,15 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 }
 
 
-nt f2fs_sync_fs(struct super_block *sb, int sync)
+nt qfs_sync_fs(struct super_block *sb, int sync)
 {
-    struct f2fs_sb_info *sbi = F2FS_SB(sb);
+    struct qfs_sb_info *sbi = F2FS_SB(sb);
     int err = 0;
 
-    if (unlikely(f2fs_cp_error(sbi)))
+    if (unlikely(qfs_cp_error(sbi)))
         return 0;
 
-    trace_f2fs_sync_fs(sb, sync);
+    trace_qfs_sync_fs(sb, sync);
 
     if (unlikely(is_sbi_flag_set(sbi, SBI_POR_DOING)))
         return -EAGAIN;
@@ -473,17 +473,17 @@ nt f2fs_sync_fs(struct super_block *sb, int sync)
         cpc.reason = __get_cp_reason(sbi);
 
         mutex_lock(&sbi->gc_mutex);
-        err = f2fs_write_checkpoint(sbi, &cpc);
+        err = qfs_write_checkpoint(sbi, &cpc);
         mutex_unlock(&sbi->gc_mutex);
     }
-    f2fs_trace_ios(NULL, 1);
+    qfs_trace_ios(NULL, 1);
 
     return err;
 }
 
-int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
+int qfs_write_checkpoint(struct qfs_sb_info *sbi, struct cp_control *cpc)
 {   
-    struct f2fs_checkpoint *ckpt = F2FS_CKPT(sbi);
+    struct qfs_checkpoint *ckpt = F2FS_CKPT(sbi);
     unsigned long long ckpt_ver;
     int err = 0;
 
@@ -493,28 +493,28 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
         ((cpc->reason & CP_FASTBOOT) || (cpc->reason & CP_SYNC) ||
         ((cpc->reason & CP_DISCARD) && !sbi->discard_blks)))
         goto out;
-    if (unlikely(f2fs_cp_error(sbi))) {
+    if (unlikely(qfs_cp_error(sbi))) {
         err = -EIO;
         goto out;
     }
-    if (f2fs_readonly(sbi->sb)) {
+    if (qfs_readonly(sbi->sb)) {
         err = -EROFS;
         goto out;
     }
 
-    trace_f2fs_write_checkpoint(sbi->sb, cpc->reason, "start block_ops");
+    trace_qfs_write_checkpoint(sbi->sb, cpc->reason, "start block_ops");
 
     err = block_operations(sbi);
     if (err)
         goto out;
 
-    trace_f2fs_write_checkpoint(sbi->sb, cpc->reason, "finish block_ops");
+    trace_qfs_write_checkpoint(sbi->sb, cpc->reason, "finish block_ops");
 
-    f2fs_flush_merged_writes(sbi);
+    qfs_flush_merged_writes(sbi);
 
     /* this is the case of multiple fstrims without any changes */
     if (cpc->reason & CP_DISCARD) {
-        if (!f2fs_exist_trim_candidates(sbi, cpc)) {
+        if (!qfs_exist_trim_candidates(sbi, cpc)) {
             unblock_operations(sbi);
             goto out;
         }
@@ -522,8 +522,8 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
         if (NM_I(sbi)->dirty_nat_cnt == 0 &&
                 SIT_I(sbi)->dirty_sentries == 0 &&
                 prefree_segments(sbi) == 0) {
-            f2fs_flush_sit_entries(sbi, cpc);
-            f2fs_clear_prefree_segments(sbi, cpc);
+            qfs_flush_sit_entries(sbi, cpc);
+            qfs_clear_prefree_segments(sbi, cpc);
             unblock_operations(sbi);
             goto out;
         }
@@ -538,32 +538,32 @@ int f2fs_write_checkpoint(struct f2fs_sb_info *sbi, struct cp_control *cpc)
     ckpt->checkpoint_ver = cpu_to_le64(++ckpt_ver);
 
     /* write cached NAT/SIT entries to NAT/SIT area */
-    f2fs_flush_nat_entries(sbi, cpc);
-    f2fs_flush_sit_entries(sbi, cpc);
+    qfs_flush_nat_entries(sbi, cpc);
+    qfs_flush_sit_entries(sbi, cpc);
 
     /* unlock all the fs_lock[] in do_checkpoint() */
     err = do_checkpoint(sbi, cpc);
     if (err)
-        f2fs_release_discard_addrs(sbi);
+        qfs_release_discard_addrs(sbi);
     else
 
-        f2fs_clear_prefree_segments(sbi, cpc);
+        qfs_clear_prefree_segments(sbi, cpc);
 
     unblock_operations(sbi);
     stat_inc_cp_count(sbi->stat_info);
 
     if (cpc->reason & CP_RECOVERY)
-        f2fs_msg(sbi->sb, KERN_NOTICE,
+        qfs_msg(sbi->sb, KERN_NOTICE,
             "checkpoint: version = %llx", ckpt_ver);
 
     /* do checkpoint periodically */
-    f2fs_update_time(sbi, CP_TIME);
-    trace_f2fs_write_checkpoint(sbi->sb, cpc->reason, "finish checkpoint");
+    qfs_update_time(sbi, CP_TIME);
+    trace_qfs_write_checkpoint(sbi->sb, cpc->reason, "finish checkpoint");
 out:
     mutex_unlock(&sbi->cp_mutex);
     return err;
 }
-int f2fs_fsync_node_pages(struct f2fs_sb_info *sbi, struct inode *inode,
+int qfs_fsync_node_pages(struct qfs_sb_info *sbi, struct inode *inode,
             struct writeback_control *wbc, bool atomic)
 {       
     pgoff_t index;
@@ -579,7 +579,7 @@ int f2fs_fsync_node_pages(struct f2fs_sb_info *sbi, struct inode *inode,
         last_page = last_fsync_dnode(sbi, ino);
         if (IS_ERR_OR_NULL(last_page))
             return PTR_ERR_OR_ZERO(last_page);
-        if (f2fs_is_added_file(inode))
+        if (qfs_is_added_file(inode))
             atomic = false;
     }
 retry:
@@ -595,8 +595,8 @@ retry:
             struct page *page = pvec.pages[i];
             bool submitted = false;
 
-            if (unlikely(f2fs_cp_error(sbi))) {
-                f2fs_put_page(last_page, 0);
+            if (unlikely(qfs_cp_error(sbi))) {
+                qfs_put_page(last_page, 0);
                 pagevec_release(&pvec);
                 ret = -EIO;
                 goto out;
@@ -626,7 +626,7 @@ continue_unlock:
                 goto continue_unlock;
             }
 
-            f2fs_wait_on_page_writeback(page, NODE, true);
+            qfs_wait_on_page_writeback(page, NODE, true);
             BUG_ON(PageWriteback(page));
 
             set_fsync_mark(page, 0);
@@ -637,9 +637,9 @@ continue_unlock:
                 if (IS_INODE(page)) {
                     if (is_inode_flag_set(inode,
                                FI_DIRTY_INODE))
-                        f2fs_update_inode(inode, page);
+                        qfs_update_inode(inode, page);
                     set_dentry_mark(page,
-                        f2fs_need_dentry_mark(sbi, ino));
+                        qfs_need_dentry_mark(sbi, ino));
                 }
                 /*  may be written by other thread */
                 if (!PageDirty(page))
@@ -655,14 +655,14 @@ continue_unlock:
                         FS_NODE_IO);
             if (ret) {
                 unlock_page(page);
-                f2fs_put_page(last_page, 0);
+                qfs_put_page(last_page, 0);
                 break;
             } else if (submitted) {
                 last_idx = page->index;
             }
 
             if (page == last_page) {
-                if (f2fs_is_added_file(inode)) {
+                if (qfs_is_added_file(inode)) {
                     struct atomic_file_set *afs =
                                                F2FS_I(inode)->af->afs;
                     struct master_node *mn;
@@ -670,18 +670,18 @@ continue_unlock:
                     struct node_info ni;
                     nid_t nid;
 
-                    mpage = f2fs_get_node_page(sbi, afs->master_nid);
+                    mpage = qfs_get_node_page(sbi, afs->master_nid);
                     mn = page_address(mpage);
 
                     nid = nid_of_node(page);
-                    f2fs_get_node_info(sbi, nid, &ni);
+                    qfs_get_node_info(sbi, nid, &ni);
 
                     mn->atm_addrs[afs->commit_file_count++] =
                                                           ni.blk_addr;
-                    f2fs_put_page(mpage, 1);
+                    qfs_put_page(mpage, 1);
                 }
 
-                f2fs_put_page(page, 0);
+                qfs_put_page(page, 0);
 
 
                 marked = true;
@@ -695,21 +695,21 @@ continue_unlock:
             break;
     }
     if (!ret && atomic && !marked) {
-        f2fs_msg(sbi->sb, KERN_DEBUG,
+        qfs_msg(sbi->sb, KERN_DEBUG,
             "Retry to write fsync mark: ino=%u, idx=%lx",
                     ino, last_page->index);
         lock_page(last_page);
-        f2fs_wait_on_page_writeback(last_page, NODE, true);
+        qfs_wait_on_page_writeback(last_page, NODE, true);
         set_page_dirty(last_page);
         unlock_page(last_page);
         goto retry;
     }
 out:
     if (last_idx != ULONG_MAX)
-        f2fs_submit_merged_write_cond(sbi, NULL, ino, last_idx, NODE);
+        qfs_submit_merged_write_cond(sbi, NULL, ino, last_idx, NODE);
     return ret ? -EIO: 0;
 }
-int f2fs_wait_on_node_pages_writeback(struct f2fs_sb_info *sbi, nid_t ino)
+int qfs_wait_on_node_pages_writeback(struct qfs_sb_info *sbi, nid_t ino)
 {
     pgoff_t index = 0;
     struct pagevec pvec;
@@ -726,7 +726,7 @@ int f2fs_wait_on_node_pages_writeback(struct f2fs_sb_info *sbi, nid_t ino)
             struct page *page = pvec.pages[i];
 
             if (ino && ino_of_node(page) == ino) {
-                f2fs_wait_on_page_writeback(page, NODE, true);
+                qfs_wait_on_page_writeback(page, NODE, true);
                 if (TestClearPageError(page))
                     ret = -EIO;
             }
@@ -740,7 +740,7 @@ int f2fs_wait_on_node_pages_writeback(struct f2fs_sb_info *sbi, nid_t ino)
         ret = ret2;
     return ret;
 }
-int f2fs_issue_flush(struct f2fs_sb_info *sbi, nid_t ino)
+int qfs_issue_flush(struct qfs_sb_info *sbi, nid_t ino)
 {
     struct flush_cmd_control *fcc = SM_I(sbi)->fcc_info;
     struct flush_cmd cmd;
@@ -774,7 +774,7 @@ int f2fs_issue_flush(struct f2fs_sb_info *sbi, nid_t ino)
     if (waitqueue_active(&fcc->flush_wait_queue))
         wake_up(&fcc->flush_wait_queue);
 
-    if (fcc->f2fs_issue_flush) {
+    if (fcc->qfs_issue_flush) {
         wait_for_completion(&cmd.wait);
         atomic_dec(&fcc->issing_flush);
     } else {
@@ -803,13 +803,13 @@ int f2fs_issue_flush(struct f2fs_sb_info *sbi, nid_t ino)
 
     return cmd.ret;
 }
-void f2fs_wait_on_page_writeback(struct page *page,
+void qfs_wait_on_page_writeback(struct page *page,
                 enum page_type type, bool ordered)
 {
     if (PageWriteback(page)) {
-        struct f2fs_sb_info *sbi = F2FS_P_SB(page);
+        struct qfs_sb_info *sbi = F2FS_P_SB(page);
 
-        f2fs_submit_merged_write_cond(sbi, page->mapping->host,
+        qfs_submit_merged_write_cond(sbi, page->mapping->host,
                         0, page->index, type);
 
         if (ordered)
@@ -818,7 +818,7 @@ void f2fs_wait_on_page_writeback(struct page *page,
             wait_for_stable_page(page);
     }
 }
-int f2fs_do_write_data_page(struct f2fs_io_info *fio)
+int qfs_do_write_data_page(struct qfs_io_info *fio)
 {
     struct page *page = fio->page;
     struct inode *inode = page->mapping->host;
@@ -829,7 +829,7 @@ int f2fs_do_write_data_page(struct f2fs_io_info *fio)
 
     set_new_dnode(&dn, inode, NULL, NULL, 0);
     if (need_inplace_update(fio) &&
-            f2fs_lookup_extent_cache(inode, page->index, &ei)) {
+            qfs_lookup_extent_cache(inode, page->index, &ei)) {
         fio->old_blkaddr = ei.blk + page->index - ei.fofs;
  
         if (is_valid_blkaddr(fio->old_blkaddr)) {
@@ -839,11 +839,11 @@ int f2fs_do_write_data_page(struct f2fs_io_info *fio)
         }
     }
 
-    /* Deadlock due to between page->lock and f2fs_lock_op */
-    if (fio->need_lock == LOCK_REQ && !f2fs_trylock_op(fio->sbi))
+    /* Deadlock due to between page->lock and qfs_lock_op */
+    if (fio->need_lock == LOCK_REQ && !qfs_trylock_op(fio->sbi))
         return -EAGAIN;
 
-    err = f2fs_get_dnode_of_data(&dn, page->index, LOOKUP_NODE);
+    err = qfs_get_dnode_of_data(&dn, page->index, LOOKUP_NODE);
     if (err)
         goto out;
 
@@ -867,16 +867,16 @@ got_it:
 
         set_page_writeback(page);
         ClearPageError(page);
-        f2fs_put_dnode(&dn);
+        qfs_put_dnode(&dn);
         if (fio->need_lock == LOCK_REQ)
-            f2fs_unlock_op(fio->sbi);
-        err = f2fs_inplace_write_data(fio);
-        trace_f2fs_do_write_data_page(fio->page, IPU);
+            qfs_unlock_op(fio->sbi);
+        err = qfs_inplace_write_data(fio);
+        trace_qfs_do_write_data_page(fio->page, IPU);
         set_inode_flag(inode, FI_UPDATE_WRITE);
         return err;
     }
     if (fio->need_lock == LOCK_RETRY) {
-        if (!f2fs_trylock_op(fio->sbi)) {
+        if (!qfs_trylock_op(fio->sbi)) {
             err = -EAGAIN;
             goto out_writepage;
         }
@@ -891,16 +891,16 @@ got_it:
     ClearPageError(page);
 
     /* LFS mode write path */
-    f2fs_outplace_write_data(&dn, fio);
-    trace_f2fs_do_write_data_page(page, OPU);
+    qfs_outplace_write_data(&dn, fio);
+    trace_qfs_do_write_data_page(page, OPU);
     set_inode_flag(inode, FI_APPEND_WRITE);
     if (page->index == 0)
         set_inode_flag(inode, FI_FIRST_BLOCK_WRITTEN);
 out_writepage:
-    f2fs_put_dnode(&dn);
+    qfs_put_dnode(&dn);
 out:
     if (fio->need_lock == LOCK_REQ)
-        f2fs_unlock_op(fio->sbi);
+        qfs_unlock_op(fio->sbi);
     return err;
 }
 int ____write_node_page(struct page *page, bool atomic, bool *submitted,
@@ -913,10 +913,10 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
                 struct writeback_control *wbc, bool do_balance,
                 enum iostat_type io_type)
 {
-    struct f2fs_sb_info *sbi = F2FS_P_SB(page);
+    struct qfs_sb_info *sbi = F2FS_P_SB(page);
     nid_t nid;
     struct node_info ni;
-    struct f2fs_io_info fio = {
+    struct qfs_io_info fio = {
         .sbi = sbi,
         .ino = ino_of_node(page),
         .type = NODE,
@@ -929,8 +929,8 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
         .io_wbc = wbc,
     };
 
-    trace_f2fs_writepage(page, NODE);
-    if (unlikely(f2fs_cp_error(sbi)))
+    trace_qfs_writepage(page, NODE);
+    if (unlikely(qfs_cp_error(sbi)))
         goto redirty_out;
 
     if (unlikely(is_sbi_flag_set(sbi, SBI_POR_DOING)))
@@ -938,7 +938,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 
     /* get old block addr of this node page */
     nid = nid_of_node(page);
-    f2fs_bug_on(sbi, page->index != nid);
+    qfs_bug_on(sbi, page->index != nid);
 
     if (wbc->for_reclaim) {
         if (!down_read_trylock(&sbi->node_write))
@@ -947,7 +947,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
         down_read(&sbi->node_write);
     }
 
-    f2fs_get_node_info(sbi, nid, &ni);
+    qfs_get_node_info(sbi, nid, &ni);
 
     /* This page is already truncated */
     if (unlikely(ni.blk_addr == NULL_ADDR)) {
@@ -964,28 +964,28 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
     set_page_writeback(page);
     ClearPageError(page);
     fio.old_blkaddr = ni.blk_addr;
-    f2fs_do_write_node_page(nid, &fio);
+    qfs_do_write_node_page(nid, &fio);
     set_node_addr(sbi, &ni, fio.new_blkaddr, is_fsync_dnode(page));
     dec_page_count(sbi, F2FS_DIRTY_NODES);
     up_read(&sbi->node_write);
 
     if (wbc->for_reclaim) {
-        f2fs_submit_merged_write_cond(sbi, page->mapping->host, 0,
+        qfs_submit_merged_write_cond(sbi, page->mapping->host, 0,
                         page->index, NODE);
         submitted = NULL;
     }
 
     unlock_page(page);
 
-    if (unlikely(f2fs_cp_error(sbi))) {
-        f2fs_submit_merged_write(sbi, NODE);
+    if (unlikely(qfs_cp_error(sbi))) {
+        qfs_submit_merged_write(sbi, NODE);
         submitted = NULL;
     }
     if (submitted)
         *submitted = fio.submitted;
 
     if (do_balance)
-        f2fs_balance_fs(sbi, false);
+        qfs_balance_fs(sbi, false);
     return 0;
 
 redirty_out:
@@ -993,17 +993,17 @@ redirty_out:
     return AOP_WRITEPAGE_ACTIVATE;
 }
 
-void f2fs_flush_merged_writes(struct f2fs_sb_info *sbi)
+void qfs_flush_merged_writes(struct qfs_sb_info *sbi)
 {
-    f2fs_submit_merged_write(sbi, DATA);
-    f2fs_submit_merged_write(sbi, NODE);
-    f2fs_submit_merged_write(sbi, META);
+    qfs_submit_merged_write(sbi, DATA);
+    qfs_submit_merged_write(sbi, NODE);
+    qfs_submit_merged_write(sbi, META);
 }
-void f2fs_submit_merged_write(struct f2fs_sb_info *sbi, enum page_type type)
+void qfs_submit_merged_write(struct qfs_sb_info *sbi, enum page_type type)
 {
     __submit_merged_write_cond(sbi, NULL, 0, 0, type, true);
 }
-static void __submit_merged_write_cond(struct f2fs_sb_info *sbi,
+static void __submit_merged_write_cond(struct qfs_sb_info *sbi,
                 struct inode *inode, nid_t ino, pgoff_t idx,
                 enum page_type type, bool force)
 {
@@ -1014,7 +1014,7 @@ static void __submit_merged_write_cond(struct f2fs_sb_info *sbi,
 
     for (temp = HOT; temp < NR_TEMP_TYPE; temp++) {
 
-        __f2fs_submit_merged_write(sbi, type, temp);
+        __qfs_submit_merged_write(sbi, type, temp);
 
         /* TODO: use HOT temp only for meta pages now. */
         if (type >= META)
@@ -1024,7 +1024,7 @@ static void __submit_merged_write_cond(struct f2fs_sb_info *sbi,
 static int __revoke_inmem_pages(struct inode *inode,
                 struct list_head *head, bool drop, bool recover)
 {
-    struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
+    struct qfs_sb_info *sbi = F2FS_I_SB(inode);
     struct inmem_pages *cur, *tmp;
     int err = 0;
 
@@ -1039,20 +1039,20 @@ static int __revoke_inmem_pages(struct inode *inode,
         inode = page->mapping->host;
 
         if (drop)
-            trace_f2fs_commit_inmem_page(page, INMEM_DROP);
+            trace_qfs_commit_inmem_page(page, INMEM_DROP);
 
         lock_page(page);
 
-        f2fs_wait_on_page_writeback(page, DATA, true);
+        qfs_wait_on_page_writeback(page, DATA, true);
 
         if (recover) {
             struct dnode_of_data dn;
             struct node_info ni;
 
-            trace_f2fs_commit_inmem_page(page, INMEM_REVOKE);
+            trace_qfs_commit_inmem_page(page, INMEM_REVOKE);
 retry:
             set_new_dnode(&dn, inode, NULL, NULL, 0);
-            err = f2fs_get_dnode_of_data(&dn, page->index,
+            err = qfs_get_dnode_of_data(&dn, page->index,
                                 LOOKUP_NODE);
             if (err) {
                 if (err == -ENOMEM) {
@@ -1063,14 +1063,14 @@ retry:
                 err = -EAGAIN;
                 goto next;
             }
-            f2fs_get_node_info(sbi, dn.nid, &ni);
+            qfs_get_node_info(sbi, dn.nid, &ni);
             if (cur->old_addr == NEW_ADDR) {
-                f2fs_invalidate_blocks(sbi, dn.data_blkaddr);
-                f2fs_update_data_blkaddr(&dn, NEW_ADDR);
+                qfs_invalidate_blocks(sbi, dn.data_blkaddr);
+                qfs_update_data_blkaddr(&dn, NEW_ADDR);
             } else
-                f2fs_replace_block(sbi, &dn, dn.data_blkaddr,
+                qfs_replace_block(sbi, &dn, dn.data_blkaddr,
                     cur->old_addr, ni.version, true, true);
-            f2fs_put_dnode(&dn);
+            qfs_put_dnode(&dn);
         }
 next:
         /* we don't need to invalidate this in the sccessful status */
